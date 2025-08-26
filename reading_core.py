@@ -42,18 +42,22 @@ def process_file(input_file: Path, output_folder: Path):
         footer.append(hidden_p)
         div.replace_with(footer)
 
-    # 5) Images -> figure + figcaption (alt text mirrored in hidden caption)
+     # 5) Images -> figure + figcaption (alt text mirrored in hidden caption)
     for img in list(soup.find_all("img")):
+        parent = img.parent  # remember original parent
         fig = soup.new_tag("figure")
-        img.extract()
-        fig.append(img)
+
+        img.extract()        # take the <img> out
+        fig.append(img)      # wrap it in <figure>
+
         figcap = soup.new_tag("figcaption")
         hidden_p = soup.new_tag("p", attrs={"class": "text-hidden"})
         hidden_p.string = img.get("alt", "Image")
         figcap.append(hidden_p)
         fig.append(figcap)
-        # Insert figure where the image was
-        img.replace_with(fig)
+
+        # put <figure> back into parent
+        parent.append(fig)
 
     # 6) Patch all spans: aria-hidden="true"
     for span in soup.find_all("span"):
