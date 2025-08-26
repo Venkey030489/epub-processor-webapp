@@ -1,8 +1,7 @@
-from pathlib import Path
 import os
-import shutil
 import tempfile
 import zipfile
+from pathlib import Path
 from flask import Flask, render_template_string, request, redirect, url_for, send_from_directory, flash
 from reading_core import process_folder
 
@@ -11,163 +10,179 @@ app.secret_key = "secret123"
 OUTPUT_FOLDER = "outputs"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# Templates inline for simplicity
-UPLOAD_PAGE = """
-<!DOCTYPE html>
+# Global progress data
+progress_data = {"percent": 0, "stage": "Idle", "file": ""}
+
+
+# ------------------- Progress Callback -------------------
+def _update_progress(current, total, stage, filename):
+    if total > 0:
+        progress_data["percent"] = int((current / total) * 100)
+    else:
+        progress_data["percent"] = 0
+    progress_data["stage"] = stage
+    progress_data["file"] = filename
+
+
+# ------------------- HTML Templates -------------------
+UPLOAD_FORM_HTML = """
+<!doctype html>
 <html>
 <head>
   <title>EPUB Processor</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 </head>
-<body class="bg-light">
-<div class="container py-5">
-  <h1 class="mb-4">📚 EPUB Processor</h1>
-  <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="card p-4 shadow-sm bg-white">
+<body class="p-5">
+  <h2>Upload EPUB (.zip)</h2>
+  <form id="upload-form" method="post" enctype="multipart/form-data">
     <div class="mb-3">
-      <label class="form-label">Upload EPUB .zip</label>
-      <input class="form-control" type="file" name="file" required>
+      <input type="file" name="file" accept=".zip" class="form-control" required>
     </div>
-    <button class="btn btn-primary" type="submit">Process</button>
+    <button id="upload-btn" type="submit" class="btn btn-primary">
+      <span id="btn-text">Upload & Process</span>
+      <span id="btn-spinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+    </button>
   </form>
-  {% with messages = get_flashed_messages() %}
-    {% if messages %}
-      <div class="alert alert-danger mt-3">{{ messages[0] }}</div>
-    {% endif %}
-  {% endwith %}
-</div>
-</body>
-</html>
-"""
 
-PROGRESS_PAGE = """
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Processing EPUB</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-  <script>
-    function updateProgress() {
-      $.get("{{ url_for('progress') }}", function(data) {
-        $("#progress-bar").css("width", data.percent + "%");
-        $("#progress-bar").text(data.percent + "%");
-        if (data.percent < 100) {
-          setTimeout(updateProgress, 1000);
-        } else {
-          window.location.href = "{{ url_for('success') }}";
-        }
-      });
-    }
-    $(document).ready(function() {
-      updateProgress();
-    });
-  </script>
-</head>
-<body class="bg-light">
-<div class="container py-5 text-center">
-  <h2 class="mb-4">⏳ Processing...</h2>
-  <div class="progress" style="height: 30px;">
-    <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated bg-success"
-         role="progressbar" style="width: 0%">0%</div>
+  <div class="progress mt-4" style="height:30px;">
+    <div id="progress-bar" class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+         role="progressbar" style="width:0%">0%</div>
   </div>
-</div>
+  <p id="progress-text" class="mt-2 text-muted"></p>
+
+  <script>
+    // Show spinner & disable button after form submit
+    document.getElementById("upload-form").addEventListener("submit", function() {
+      const btn = document.getElementById("upload-btn");
+      document.getElementById("btn-text").textContent = "Processing...";
+      document.getElementById("btn-spinner").classList.remove("d-none");
+      btn.disabled = true;
+    });
+
+    async function fetchProgress() {
+      const res = await fetch("/progress");
+      if (!res.ok) return;
+      const data = await res.json();
+      const bar = document.getElementById("progress-bar");
+      const text = document.getElementById("progress-text");
+
+      bar.style.width = data.percent + "%";
+      bar.innerText = data.percent + "%";
+      text.innerText = data.stage + (data.file ? " → " + data.file : "");
+
+      // ✅ Turn green when complete
+      if (data.percent >= 100) {
+        bar.classList.remove("progress-bar-striped", "progress-bar-animated", "bg-primary");
+        bar.classList.add("bg-success");
+      }
+    }
+
+    setInterval(fetchProgress, 1000);
+  </script>
 </body>
 </html>
 """
 
-SUCCESS_PAGE = """
-<!DOCTYPE html>
+SUCCESS_HTML = """
+<!doctype html>
 <html>
 <head>
-  <title>EPUB Processed</title>
+  <title>Processing Complete</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
-<body class="bg-light">
-<div class="container py-5 text-center">
-  <h2 class="mb-4">✅ Processing Complete</h2>
-  <p>Your EPUB has been patched and packaged. Click below to download.</p>
-  <a href="{{ url_for('download_file', filename=zip_name) }}" class="btn btn-success btn-lg">
-    ⬇ Download Processed ZIP
-  </a>
-</div>
+<body class="p-5 text-center">
+  <h2 class="text-success">✅ Processing Complete!</h2>
+  <p>Your EPUB has been processed successfully.</p>
+  <a class="btn btn-success btn-lg" href="{{ url_for('download_file', filename=filename) }}">⬇ Download Processed ZIP</a>
 </body>
 </html>
 """
 
-# Shared state for progress
-progress_data = {"current": 0, "total": 1}
 
-@app.route("/", methods=["GET"])
-def index():
-    return render_template_string(UPLOAD_PAGE)
-
-@app.route("/", methods=["POST"])
+# ------------------- Routes -------------------
+@app.route("/", methods=["GET", "POST"])
 def upload():
-    if "file" not in request.files:
-        flash("No file uploaded")
-        return redirect(request.url)
+    if request.method == "POST":
+        if "file" not in request.files:
+            flash("No file part")
+            return redirect(request.url)
 
-    file = request.files["file"]
-    if file.filename == "":
-        flash("No selected file")
-        return redirect(request.url)
+        file = request.files["file"]
+        if file.filename == "":
+            flash("No selected file")
+            return redirect(request.url)
 
-    if not file.filename.lower().endswith(".zip"):
-        flash("Please upload a .zip file containing EPUB files")
-        return redirect(request.url)
+        if file and file.filename.lower().endswith(".zip"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmpdir_path = Path(tmpdir)
 
-    # Reset progress
-    progress_data["current"] = 0
-    progress_data["total"] = 1
+                # Paths
+                extract_dir = tmpdir_path / "extracted"
+                output_dir = tmpdir_path / "processed"
+                extract_dir.mkdir(parents=True, exist_ok=True)
+                output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create temp workspace
-    temp_dir = tempfile.mkdtemp()
-    input_zip = os.path.join(temp_dir, "input.zip")
-    file.save(input_zip)
+                # Save uploaded ZIP
+                uploaded_zip = tmpdir_path / "uploaded.zip"
+                file.save(uploaded_zip)
 
-    extract_dir = os.path.join(temp_dir, "extracted")
-    os.makedirs(extract_dir, exist_ok=True)
+                # Extract EPUB ZIP
+                with zipfile.ZipFile(uploaded_zip, "r") as zip_ref:
+                    zip_ref.extractall(extract_dir)
 
-    with zipfile.ZipFile(input_zip, "r") as zip_ref:
-        zip_ref.extractall(extract_dir)
+                # Run processing
+                try:
+                    report_path = process_folder(
+                        Path(extract_dir),
+                        Path(output_dir),
+                        progress_callback=_update_progress,
+                        feature_titles=None,
+                        h1_candidates=None
+                    )
+                except Exception as e:
+                    return render_template_string(
+                        "<h2 style='color:red;'>Processing failed: {{err}}</h2>",
+                        err=str(e)
+                    )
 
-    output_dir = os.path.join(temp_dir, "processed")
-    os.makedirs(output_dir, exist_ok=True)
+                # Package final ZIP
+                final_zip_path = Path(OUTPUT_FOLDER) / "processed_output.zip"
+                with zipfile.ZipFile(final_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                    # Add processed files
+                    for root, _, files in os.walk(output_dir):
+                        for fname in files:
+                            fpath = Path(root) / fname
+                            arcname = fpath.relative_to(output_dir)
+                            zipf.write(fpath, arcname)
 
-    # Run processing
-    process_folder(
-        extract_dir,
-        output_dir,
-        progress_callback=_update_progress,
-        feature_titles=None,   # pass list if you want Excel feature tracking
-        h1_candidates=None     # pass list if you want H1 rules applied
-    )
+                    # Add Excel report
+                    if report_path.exists():
+                        zipf.write(report_path, report_path.name)
 
-    # Package final ZIP
-    final_zip_path = os.path.join(OUTPUT_FOLDER, "processed_output.zip")
-    if os.path.exists(final_zip_path):
-        os.remove(final_zip_path)
-    shutil.make_archive(final_zip_path.replace(".zip", ""), "zip", output_dir)
+                return redirect(url_for("success", filename=final_zip_path.name))
 
-    return render_template_string(PROGRESS_PAGE)
+        else:
+            flash("Please upload a valid EPUB zip file")
+            return redirect(request.url)
 
-def _update_progress(current, total, stage, filename):
-    progress_data["current"] = current
-    progress_data["total"] = total
+    return render_template_string(UPLOAD_FORM_HTML)
+
 
 @app.route("/progress")
 def progress():
-    percent = int((progress_data["current"] / progress_data["total"]) * 100)
-    return {"percent": percent}
+    return progress_data
 
-@app.route("/success")
-def success():
-    return render_template_string(SUCCESS_PAGE, zip_name="processed_output.zip")
 
-@app.route("/download/<path:filename>")
+@app.route("/success/<filename>")
+def success(filename):
+    return render_template_string(SUCCESS_HTML, filename=filename)
+
+
+@app.route("/download/<filename>")
 def download_file(filename):
     return send_from_directory(OUTPUT_FOLDER, filename, as_attachment=True)
 
+
+# ------------------- Run -------------------
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
