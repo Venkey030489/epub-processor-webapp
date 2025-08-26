@@ -1,0 +1,41 @@
+git remote add origin https://github.com/Venkey030489/epub-processor-webapp.git
+git branch -M main
+git push -u origin main
+
+
+
+D:\python\Flask\Epub_Processor>cd D:\python\Flask\Epub_Processor
+
+D:\python\Flask\Epub_Processor>git init
+Initialized empty Git repository in D:/python/Flask/Epub_Processor/.git/
+
+D:\python\Flask\Epub_Processor>git add .
+
+D:\python\Flask\Epub_Processor>git commit -m "Initial commit - EPUB Processor web app"
+[master (root-commit) e9303c8] Initial commit - EPUB Processor web app
+ 5 files changed, 395 insertions(+)
+ create mode 100644 .gitignore
+ create mode 100644 Procfile
+ create mode 100644 app.py
+ create mode 100644 reading_core.py
+ create mode 100644 requirements.txt
+
+D:\python\Flask\Epub_Processor>git remote add origin https://github.com/Venkey030489/epub-processor-webapp.git
+
+D:\python\Flask\Epub_Processor>git remote add origin https://github.com/Venkey030489/epub-processor-webapp.git
+error: remote origin already exists.
+
+D:\python\Flask\Epub_Processor>git branch -M main
+
+D:\python\Flask\Epub_Processor>git push -u origin main
+Enumerating objects: 7, done.
+Counting objects: 100% (7/7), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (6/6), done.
+Writing objects: 100% (7/7), 5.10 KiB | 2.55 MiB/s, done.
+Total 7 (delta 0), reused 0 (delta 0), pack-reused 0 (from 0)
+To https://github.com/Venkey030489/epub-processor-webapp.git
+ * [new branch]      main -> main
+branch 'main' set up to track 'origin/main'.
+
+D:\python\Flask\Epub_Processor>
